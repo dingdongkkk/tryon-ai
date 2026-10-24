@@ -142,6 +142,13 @@ export const sqliteStore = {
       : db().prepare("SELECT data FROM agent_runs ORDER BY at DESC LIMIT ?").all(limit);
     return (rows as { data: string }[]).map((r) => JSON.parse(r.data) as AgentRun);
   },
+  async getSetting<T>(key: string): Promise<T | undefined> {
+    const row = db().prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+    return row ? (JSON.parse(row.value) as T) : undefined;
+  },
+  async setSetting(key: string, value: unknown) {
+    db().prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, JSON.stringify(value));
+  },
   async disabledAgents(): Promise<AgentKey[]> {
     const row = db().prepare("SELECT value FROM settings WHERE key = 'disabled_agents'").get() as { value: string } | undefined;
     return row ? JSON.parse(row.value) : [];

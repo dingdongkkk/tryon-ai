@@ -29,6 +29,10 @@ function getAccessCode() {
   return accessCode;
 }
 const tokenRequest = () => fetch("/api/decart/token", { method: "POST", headers: { "x-access-code": getAccessCode() } });
+/** Tell the server a key ran dry so the next token comes from a backup key. */
+const reportExhausted = (keyIndex: number) =>
+  fetch("/api/decart/exhausted", { method: "POST", headers: { "content-type": "application/json", "x-access-code": getAccessCode() }, body: JSON.stringify({ keyIndex }) }).catch(() => undefined);
+const isCreditProblem = (msg: string) => /credit|quota|insufficient|payment required|402/i.test(msg);
 
 const END_REASONS: Record<string, string> = {
   insufficient_credits: "Your Decart credits ran out.",
@@ -51,6 +55,9 @@ export function useDecartTryOn() {
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const garmentRef = useRef<Garment | null>(null);
   const setSeq = useRef(0);
+  const keyIndex = useRef<number | null>(null);
+  const creditRetries = useRef(0);
+  const startRef = useRef<((g: Garment, isRetry?: boolean) => Promise<void>) | null>(null);
 
   const teardown = useCallback(() => {
     if (timer.current) clearInterval(timer.current);
@@ -72,8 +79,9 @@ export function useDecartTryOn() {
   }, [teardown]);
 
   const start = useCallback(
-    async (garment: Garment) => {
+    async (garment: Garment, isRetry = false) => {
       teardown();
+      if (!isRetry) creditRetries.current = 0;
       garmentRef.current = garment;
       setError("");
       setPhase("starting");
@@ -84,6 +92,7 @@ export function useDecartTryOn() {
         setNeedsCode(first.code === "ACCESS_CODE");
         if (!probe.ok) throw new Error(first.error ?? "Live try-on is unavailable");
         let firstToken: string | null = first.apiKey;
+        keyIndex.current = typeof first.keyIndex === "number" ? first.keyIndex : null;
 
         const { createDecartClient, models } = await import("@decartai/sdk");
         const model = models.realtime(first.model);
@@ -104,6 +113,7 @@ export function useDecartTryOn() {
             const r = await tokenRequest();
             const j = await r.json();
             if (!r.ok) throw new Error(j.error ?? "Could not get a try-on token");
+            if (typeof j.keyIndex === "number") keyIndex.current = j.keyIndex;
             return j.apiKey;
           },
         });
@@ -128,8 +138,16 @@ export function useDecartTryOn() {
           setError(e.message || "Live try-on hit a problem");
           setPhase("error");
         });
-        session.on("sessionEnded", (e) => {
+        session.on("sessionEnded", async (e) => {
           teardown();
+          // Out of credits on this key: switch to a backup key and reconnect (up to 3 times)
+          if (e.reason === "insufficient_credits" && keyIndex.current !== null && creditRetries.current < 3 && garmentRef.current) {
+            creditRetries.current++;
+            setPhase("reconnecting");
+            await reportExhausted(keyIndex.current);
+            startRef.current?.(garmentRef.current, true);
+            return;
+          }
           setError(END_REASONS[e.reason] ?? `Session ended (${e.reason}).`);
           setPhase("ended");
         });
@@ -154,6 +172,12 @@ export function useDecartTryOn() {
       } catch (e) {
         teardown();
         const err = e as DOMException;
+        if (isCreditProblem(String(err?.message ?? "")) && keyIndex.current !== null && creditRetries.current < 3) {
+          creditRetries.current++;
+          setPhase("reconnecting");
+          await reportExhausted(keyIndex.current);
+          return startRef.current?.(garment, true);
+        }
         setError(
           err?.name === "NotAllowedError"
             ? "Camera permission is blocked. Allow camera access for this site and try again."
@@ -166,6 +190,10 @@ export function useDecartTryOn() {
     },
     [teardown],
   );
+
+  useEffect(() => {
+    startRef.current = start;
+  }, [start]);
 
   /** Swap the garment on the running session, no reconnect. set() replaces state, so send everything. */
   const changeGarment = useCallback(async (garment: Garment) => {

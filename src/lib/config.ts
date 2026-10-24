@@ -54,6 +54,10 @@ export const config = {
     // Optional: require this code before minting Decart tokens (keeps paid credits for judges/demos)
     accessCode: env("DECART_ACCESS_CODE"),
     apiKey: env("DECART_API_KEY"),
+    /** Primary key first, then backups (DECART_API_KEYS_FALLBACK, comma-separated), deduped */
+    get apiKeys() {
+      return [...new Set([env("DECART_API_KEY"), ...env("DECART_API_KEYS_FALLBACK").split(",")].map((k) => k.trim()).filter(Boolean))];
+    },
     model: env("DECART_MODEL", "lucy-vton-latest"),
     maxSessionSeconds: num("DECART_MAX_SESSION_SECONDS", 300),
     get enabled() {

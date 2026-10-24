@@ -126,6 +126,15 @@ export const pgStore = {
       : await sql()<{ data: AgentRun }[]>`SELECT data FROM agent_runs ORDER BY at DESC LIMIT ${limit}`;
     return rows.map((r) => r.data);
   },
+  async getSetting<T>(key: string): Promise<T | undefined> {
+    await ready();
+    const [r] = await sql()<{ value: T }[]>`SELECT value FROM settings WHERE key = ${key}`;
+    return r?.value;
+  },
+  async setSetting(key: string, value: unknown) {
+    await ready();
+    await sql()`INSERT INTO settings (key, value) VALUES (${key}, ${json(value)}) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
+  },
   async disabledAgents(): Promise<AgentKey[]> {
     await ready();
     const [r] = await sql()<{ value: AgentKey[] }[]>`SELECT value FROM settings WHERE key = 'disabled_agents'`;
