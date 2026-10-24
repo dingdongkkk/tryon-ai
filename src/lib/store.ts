@@ -1,123 +1,164 @@
 import "server-only";
-import { promises as fs } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
-import type { Approval, Order } from "./types";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import type { Approval, ApprovalStatus, Order } from "./types";
 import type { AgentKey, AgentRun } from "./agents";
 
-// Minimal JSON-file persistence for local development. Swap for Postgres/Supabase in production.
-type DB = {
-  orders: Record<string, Order>;
-  approvals: Record<string, Approval>;
-  agentRuns?: AgentRun[];
-  disabledAgents?: AgentKey[];
-};
+// Durable SQLite storage (WAL, transactional). Fine for a single server.
+// For serverless/multi-instance hosting, move these tables to Postgres.
 
-const MAX_RUNS = 500;
+const MAX_RUNS = 1000;
 
-const DB_PATH = path.join(process.cwd(), ".data", "db.json");
-let queue: Promise<unknown> = Promise.resolve();
+function open() {
+  const dir = process.env.DATA_DIR || path.join(process.cwd(), ".data");
+  mkdirSync(dir, { recursive: true });
+  const db = new DatabaseSync(path.join(dir, "wearable.sqlite"));
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 5000;
+    CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, status TEXT NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS agent_runs (id TEXT PRIMARY KEY, agent TEXT NOT NULL, at TEXT NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS processed_events (id TEXT PRIMARY KEY, at TEXT NOT NULL);
+  `);
+  return db;
+}
 
-async function read(): Promise<DB> {
+const g = globalThis as unknown as { __wearableDb?: DatabaseSync; __wearableDbDir?: string };
+function db() {
+  // re-open if DATA_DIR changed (tests)
+  if (!g.__wearableDb || g.__wearableDbDir !== process.env.DATA_DIR) {
+    g.__wearableDb?.close();
+    g.__wearableDb = open();
+    g.__wearableDbDir = process.env.DATA_DIR;
+  }
+  return g.__wearableDb;
+}
+
+function tx<T>(fn: (d: DatabaseSync) => T): T {
+  const d = db();
+  d.exec("BEGIN IMMEDIATE");
   try {
-    return JSON.parse(await fs.readFile(DB_PATH, "utf8")) as DB;
-  } catch {
-    return { orders: {}, approvals: {} };
+    const r = fn(d);
+    d.exec("COMMIT");
+    return r;
+  } catch (e) {
+    d.exec("ROLLBACK");
+    throw e;
   }
 }
 
-async function write(db: DB) {
-  await fs.mkdir(path.dirname(DB_PATH), { recursive: true });
-  const tmp = `${DB_PATH}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(db, null, 2));
-  await fs.rename(tmp, DB_PATH);
-}
-
-/** Serialize read-modify-write cycles so concurrent requests don't clobber each other. */
-function mutate<T>(fn: (db: DB) => T | Promise<T>): Promise<T> {
-  const run = queue.then(async () => {
-    const db = await read();
-    const result = await fn(db);
-    await write(db);
-    return result;
-  });
-  queue = run.catch(() => undefined);
-  return run;
-}
-
-export const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
 const now = () => new Date().toISOString();
+export const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+export const newSecret = () => randomBytes(24).toString("base64url");
+export const hashSecret = (s: string) => createHash("sha256").update(s).digest("hex");
+
+const getOrderRow = (d: DatabaseSync, id: string) => {
+  const row = d.prepare("SELECT data FROM orders WHERE id = ?").get(id) as { data: string } | undefined;
+  return row ? (JSON.parse(row.data) as Order) : undefined;
+};
+const putOrder = (d: DatabaseSync, o: Order) =>
+  d.prepare("INSERT INTO orders (id, created_at, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(o.id, o.createdAt, JSON.stringify(o));
+const getApprovalRow = (d: DatabaseSync, id: string) => {
+  const row = d.prepare("SELECT data FROM approvals WHERE id = ?").get(id) as { data: string } | undefined;
+  return row ? (JSON.parse(row.data) as Approval) : undefined;
+};
+const putApproval = (d: DatabaseSync, a: Approval) =>
+  d
+    .prepare("INSERT INTO approvals (id, status, created_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status = excluded.status, data = excluded.data")
+    .run(a.id, a.status, a.createdAt, JSON.stringify(a));
 
 export const store = {
   async getOrder(id: string) {
-    return (await read()).orders[id];
+    return getOrderRow(db(), id);
   },
   async listOrders() {
-    return Object.values((await read()).orders).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return (db().prepare("SELECT data FROM orders ORDER BY created_at DESC").all() as { data: string }[]).map((r) => JSON.parse(r.data) as Order);
   },
-  saveOrder(order: Order) {
-    return mutate((db) => {
-      db.orders[order.id] = order;
-      return order;
-    });
+  async saveOrder(order: Order) {
+    tx((d) => putOrder(d, order));
+    return order;
   },
-  updateOrder(id: string, patch: Partial<Order>, event?: string) {
-    return mutate((db) => {
-      const order = db.orders[id];
-      if (!order) throw new Error(`Order ${id} not found`);
-      Object.assign(order, patch, { updatedAt: now() });
-      if (event) order.history.push({ at: now(), event });
-      return order;
+  /**
+   * Atomic read-modify-write. `fn` mutates the order in place and may return false to skip
+   * the write (e.g. the transition isn't allowed from the current state).
+   */
+  async updateOrder(id: string, fn: (o: Order) => void | false, event?: string) {
+    return tx((d) => {
+      const o = getOrderRow(d, id);
+      if (!o) throw new Error(`Order ${id} not found`);
+      if (fn(o) === false) return { order: o, changed: false };
+      o.updatedAt = now();
+      if (event) o.history.push({ at: now(), event });
+      putOrder(d, o);
+      return { order: o, changed: true };
     });
   },
 
   async getApproval(id: string) {
-    return (await read()).approvals[id];
+    return getApprovalRow(db(), id);
   },
-  async listApprovals(status?: Approval["status"]) {
-    return Object.values((await read()).approvals)
-      .filter((a) => !status || a.status === status)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  async listApprovals(status?: ApprovalStatus) {
+    const rows = status
+      ? db().prepare("SELECT data FROM approvals WHERE status = ? ORDER BY created_at DESC").all(status)
+      : db().prepare("SELECT data FROM approvals ORDER BY created_at DESC").all();
+    return (rows as { data: string }[]).map((r) => JSON.parse(r.data) as Approval);
   },
-  saveApproval(approval: Approval) {
-    return mutate((db) => {
-      db.approvals[approval.id] = approval;
-      return approval;
-    });
+  async saveApproval(a: Approval) {
+    tx((d) => putApproval(d, a));
+    return a;
   },
-  /** Atomically move a pending approval to a decided state; returns null if it was already decided. */
-  decideApproval(id: string, decision: { status: "approved" | "rejected"; by: string; note?: string; stylistSize?: string }) {
-    return mutate((db) => {
-      const a = db.approvals[id];
+  /** Atomically move a pending approval to a decided state; null if missing or already decided. */
+  async decideApproval(id: string, decision: { status: "approved" | "rejected"; by: string; note?: string; stylistSize?: string }) {
+    return tx((d) => {
+      const a = getApprovalRow(d, id);
       if (!a || a.status !== "pending") return null;
       a.status = decision.status;
       a.decidedBy = decision.by;
       a.decidedAt = now();
       a.note = decision.note;
       if (a.stylist && decision.stylistSize) a.stylist.stylistSize = decision.stylistSize;
+      putApproval(d, a);
       return a;
     });
   },
 
-  logAgentRun(run: AgentRun) {
-    return mutate((db) => {
-      db.agentRuns = [run, ...(db.agentRuns ?? [])].slice(0, MAX_RUNS);
+  async isEventProcessed(eventId: string) {
+    return Boolean(db().prepare("SELECT 1 FROM processed_events WHERE id = ?").get(eventId));
+  },
+  /** Returns true the first time an event id is recorded (dedupe webhooks/callbacks). */
+  async markEventProcessed(eventId: string) {
+    const r = db().prepare("INSERT OR IGNORE INTO processed_events (id, at) VALUES (?, ?)").run(eventId, now());
+    return Number(r.changes) > 0;
+  },
+
+  async logAgentRun(run: AgentRun) {
+    tx((d) => {
+      d.prepare("INSERT INTO agent_runs (id, agent, at, data) VALUES (?, ?, ?, ?)").run(run.id, run.agent, run.at, JSON.stringify(run));
+      d.prepare("DELETE FROM agent_runs WHERE id NOT IN (SELECT id FROM agent_runs ORDER BY at DESC LIMIT ?)").run(MAX_RUNS);
     });
   },
-  async listAgentRuns(agent?: AgentKey) {
-    const runs = (await read()).agentRuns ?? [];
-    return agent ? runs.filter((r) => r.agent === agent) : runs;
+  async listAgentRuns(agent?: AgentKey, limit = 200) {
+    const rows = agent
+      ? db().prepare("SELECT data FROM agent_runs WHERE agent = ? ORDER BY at DESC LIMIT ?").all(agent, limit)
+      : db().prepare("SELECT data FROM agent_runs ORDER BY at DESC LIMIT ?").all(limit);
+    return (rows as { data: string }[]).map((r) => JSON.parse(r.data) as AgentRun);
   },
-  async disabledAgents() {
-    return (await read()).disabledAgents ?? [];
+  async disabledAgents(): Promise<AgentKey[]> {
+    const row = db().prepare("SELECT value FROM settings WHERE key = 'disabled_agents'").get() as { value: string } | undefined;
+    return row ? JSON.parse(row.value) : [];
   },
-  setAgentEnabled(agent: AgentKey, enabled: boolean) {
-    return mutate((db) => {
-      const set = new Set(db.disabledAgents ?? []);
+  async setAgentEnabled(agent: AgentKey, enabled: boolean) {
+    return tx((d) => {
+      const row = d.prepare("SELECT value FROM settings WHERE key = 'disabled_agents'").get() as { value: string } | undefined;
+      const set = new Set<AgentKey>(row ? JSON.parse(row.value) : []);
       if (enabled) set.delete(agent);
       else set.add(agent);
-      db.disabledAgents = [...set];
-      return db.disabledAgents;
+      d.prepare("INSERT INTO settings (key, value) VALUES ('disabled_agents', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify([...set]));
+      return [...set];
     });
   },
 };

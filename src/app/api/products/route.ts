@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { listProducts } from "@/lib/shift4shop";
+import { listProducts } from "@/lib/catalog";
 import { jsonError } from "@/lib/http";
 
 export async function GET() {

@@ -19,7 +19,7 @@ export const AGENT_UNITS: AgentUnit[] = [
     purpose: "Chats with shoppers, understands occasion, budget and style, and picks products from the live catalog to try on.",
     humanInLoop: "Advice only. It can't place orders or move money.",
     toolEnv: "AGENTICORG_CONCIERGE_TOOL",
-    defaultTool: "agenticorg_commerce_sales_agent",
+    defaultTool: "agenticorg_chat_agent",
   },
   {
     key: "fit_advisor",
@@ -28,7 +28,7 @@ export const AGENT_UNITS: AgentUnit[] = [
     purpose: "Reads camera-based body measurements and the try-on snapshot, and drafts a size recommendation.",
     humanInLoop: "A human stylist confirms or changes the size before the shopper sees it.",
     toolEnv: "AGENTICORG_STYLIST_TOOL",
-    defaultTool: "agenticorg_commerce_sales_agent",
+    defaultTool: "agenticorg_product_agent",
   },
   {
     key: "order_guardian",
@@ -37,7 +37,7 @@ export const AGENT_UNITS: AgentUnit[] = [
     purpose: "Screens every order for risk, address problems and unusual quantities before payment is requested.",
     humanInLoop: "A human approves before the Pine Labs payment link is issued.",
     toolEnv: "AGENTICORG_ORDER_REVIEW_TOOL",
-    defaultTool: "agenticorg_commerce_sales_agent",
+    defaultTool: "agenticorg_risk_sentinel",
   },
   {
     key: "returns_desk",
@@ -46,13 +46,13 @@ export const AGENT_UNITS: AgentUnit[] = [
     purpose: "Assesses refund requests against the order and payment history.",
     humanInLoop: "A human approves before the refund is sent to Pine Labs.",
     toolEnv: "AGENTICORG_REFUND_REVIEW_TOOL",
-    defaultTool: "agenticorg_ar_collections",
+    defaultTool: "agenticorg_complaint_resolution",
   },
   {
     key: "reconciliation",
     name: "Payment Reconciliation",
     audience: "Ops",
-    purpose: "Matches paid app orders against Pine Labs payment status and 3dcart orders, and explains every mismatch.",
+    purpose: "Matches every app order against its live Pine Labs payment status and explains each mismatch.",
     humanInLoop: "Mismatches are listed for ops to resolve. Nothing is changed automatically.",
     toolEnv: "AGENTICORG_RECON_TOOL",
     defaultTool: "agenticorg_recon_agent",

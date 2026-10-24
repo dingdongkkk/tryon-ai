@@ -4,7 +4,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import type { CartItem } from "./types";
 
 // Cart lives in localStorage (a per-browser convenience). Prices are re-checked server-side at checkout.
-const KEY = "wearable.cart.v1";
+const KEY = "tryonai.cart.v1";
 const listeners = new Set<() => void>();
 let cache: CartItem[] | null = null;
 const EMPTY: CartItem[] = [];
@@ -42,7 +42,8 @@ export function useCart() {
   const add = useCallback((item: CartItem) => {
     const cur = load();
     const i = cur.findIndex((c) => c.productId === item.productId && c.size === item.size);
-    save(i >= 0 ? cur.map((c, j) => (j === i ? { ...c, quantity: Math.min(10, c.quantity + item.quantity) } : c)) : [...cur, item]);
+    if (i < 0 && item.quantity < 1) return;
+    save(i >= 0 ? cur.map((c, j) => (j === i ? { ...c, quantity: Math.max(1, Math.min(10, c.quantity + item.quantity)) } : c)) : [...cur, item]);
   }, []);
   const remove = useCallback((productId: string, size: string) => save(load().filter((c) => !(c.productId === productId && c.size === size))), []);
   const clear = useCallback(() => save([]), []);

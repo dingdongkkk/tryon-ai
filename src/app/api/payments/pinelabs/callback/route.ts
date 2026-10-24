@@ -1,48 +1,46 @@
 import { NextResponse } from "next/server";
 import { config } from "@/lib/config";
-import { getPinelabsOrder, verifyCallbackSignature } from "@/lib/pinelabs";
+import { callbackSignature, safeEqual } from "@/lib/payment-rules";
 import { store } from "@/lib/store";
-import { markPayment } from "@/lib/workflow";
+import { syncPayment } from "@/lib/workflow";
 
 // Pine Labs redirects the shopper here (POST) after hosted checkout.
-// We verify the signature, then re-read the order status server-to-server before trusting it.
+// The callback body is only a hint: we check its signature, then re-read the order from Pine Labs
+// server-to-server and verify reference, amount, currency and status before changing anything.
+// Repeated callbacks are harmless (state transitions are idempotent and forward-only).
+
 async function readFields(req: Request): Promise<Record<string, string>> {
   const type = req.headers.get("content-type") ?? "";
   if (type.includes("application/json")) {
-    const j = await req.json();
+    const j = await req.json().catch(() => ({}));
     return Object.fromEntries(Object.entries(j).map(([k, v]) => [k, String(v ?? "")]));
   }
-  const form = await req.formData();
-  return Object.fromEntries([...form.entries()].map(([k, v]) => [k, String(v)]));
-}
-
-async function handle(req: Request, fields: Record<string, string>) {
-  const ref = new URL(req.url).searchParams.get("ref") ?? "";
-  const order = ref ? await store.getOrder(ref) : undefined;
-  const back = (q = "") => NextResponse.redirect(new URL(`/orders/${ref}${q}`, config.appUrl), 303);
-  if (!order?.pinelabs) return NextResponse.redirect(new URL("/", config.appUrl), 303);
-
-  const { signature = "", ...rest } = fields;
-  const signed = { order_id: rest.order_id, status: rest.status, error_code: rest.error_code, error_message: rest.error_message };
-  if (!verifyCallbackSignature(signed, signature)) {
-    await store.updateOrder(order.id, {}, "Rejected callback with invalid signature");
-    return back("?payment=invalid");
-  }
-  const live = config.pinelabs.enabled
-    ? await getPinelabsOrder(order.pinelabs.orderId)
-    : { data: { order_id: order.pinelabs.orderId, status: rest.status } };
-  const status = live.data?.status ?? rest.status ?? "UNKNOWN";
-  await markPayment(order.id, { status, pinelabsOrderId: live.data?.order_id });
-  return back();
+  const form = await req.formData().catch(() => null);
+  return form ? Object.fromEntries([...form.entries()].map(([k, v]) => [k, String(v)])) : {};
 }
 
 export async function POST(req: Request) {
-  return handle(req, await readFields(req));
-}
+  const ref = new URL(req.url).searchParams.get("ref") ?? "";
+  const back = (q = "") => NextResponse.redirect(new URL(`/orders/${encodeURIComponent(ref)}${q}`, config.appUrl), 303);
+  const order = ref ? await store.getOrder(ref) : undefined;
+  if (!order || order.demo) return NextResponse.redirect(new URL("/", config.appUrl), 303);
 
-// Mock checkout (no Pine Labs credentials) redirects here with GET.
-export async function GET(req: Request) {
-  if (config.pinelabs.enabled) return NextResponse.json({ error: "Method not allowed" }, { status: 405 });
-  const sp = new URL(req.url).searchParams;
-  return handle(req, { order_id: sp.get("order_id") ?? "", status: sp.get("status") ?? "PROCESSED" });
+  const f = await readFields(req);
+  if (f.order_id && !order.attempts.some((a) => a.pinelabsOrderId === f.order_id)) {
+    await store.updateOrder(order.id, () => undefined, `Callback for unknown Pine Labs order ${f.order_id} ignored`);
+    return back("?payment=unknown");
+  }
+  if (config.pinelabs.secretKey) {
+    const expected = callbackSignature({ order_id: f.order_id, status: f.status, error_code: f.error_code, error_message: f.error_message }, config.pinelabs.secretKey);
+    if (!f.signature || !safeEqual(expected, f.signature.toUpperCase())) {
+      await store.updateOrder(order.id, () => undefined, "Callback with invalid signature ignored");
+      // still fall through to a server-side status read below: it's authoritative and safe
+    }
+  }
+  try {
+    await syncPayment(order.id, "Pine Labs callback");
+  } catch (err) {
+    await store.updateOrder(order.id, () => undefined, `Status check after callback failed: ${(err as Error).message}`);
+  }
+  return back();
 }
