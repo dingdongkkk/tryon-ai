@@ -12,8 +12,10 @@ type Exhausted = Record<string, number>; // key fingerprint → when it was mark
 
 const fingerprint = (k: string) => k.slice(0, 12);
 
+let memo: { at: number; value: Exhausted } | null = null;
 async function exhausted(): Promise<Exhausted> {
-  const all = (await store.getSetting<Exhausted>(SETTING)) ?? {};
+  if (!memo || Date.now() - memo.at > 30_000) memo = { at: Date.now(), value: (await store.getSetting<Exhausted>(SETTING)) ?? {} };
+  const all = memo.value;
   const t = Date.now();
   return Object.fromEntries(Object.entries(all).filter(([, at]) => t - at < COOLDOWN_MS));
 }
@@ -23,6 +25,7 @@ export async function markExhausted(keyIndex: number) {
   if (!key) return;
   const all = await exhausted();
   all[fingerprint(key)] = Date.now();
+  memo = { at: Date.now(), value: all };
   await store.setSetting(SETTING, all);
 }
 

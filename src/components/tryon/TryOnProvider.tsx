@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { useDecartTryOn, setDecartAccessCode, type DecartPhase } from "@/hooks/useDecartTryOn";
+import { useDecartTryOn, setDecartAccessCode, prewarmDecart, type DecartPhase } from "@/hooks/useDecartTryOn";
 import { usePhotoTryOn, type PhotoPhase } from "@/hooks/usePhotoTryOn";
 import { catalog } from "@/lib/catalog";
 import type { Product } from "@/lib/types";
@@ -106,6 +106,11 @@ export default function TryOnProvider({ children, decartAvailable, freeAvailable
     decart.stop();
     photo.stopCamera();
   }, [decart, photo]);
+
+  // Warm Decart (server token, SDK, garment image) as soon as Live AI is in view
+  useEffect(() => {
+    if (view !== "closed" && mode === "decart" && decartAvailable) prewarmDecart(garment.tryOnImageUrl);
+  }, [view, mode, decartAvailable, garment.tryOnImageUrl]);
 
   const tryOn = useCallback(
     (p: Product, opts?: { open?: MirrorView }) => {

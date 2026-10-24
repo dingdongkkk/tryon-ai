@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RealTimeClient } from "@decartai/sdk";
-import { garmentBlob } from "@/lib/garment";
+import { garmentBlob, prefetchGarment } from "@/lib/garment";
 
 // Decart Lucy VTON realtime try-on.
 // Camera → Decart (WebRTC) → transformed stream. The browser only ever holds a short-lived,
@@ -33,6 +33,32 @@ const tokenRequest = () => fetch("/api/decart/token", { method: "POST", headers:
 const reportExhausted = (keyIndex: number) =>
   fetch("/api/decart/exhausted", { method: "POST", headers: { "content-type": "application/json", "x-access-code": getAccessCode() }, body: JSON.stringify({ keyIndex }) }).catch(() => undefined);
 const isCreditProblem = (msg: string) => /credit|quota|insufficient|payment required|402/i.test(msg);
+
+// ── Warm-up ──────────────────────────────────────────────────────────────
+// Starting a session needs: a token (a cold server can take ~10 s), the SDK chunk, the camera and the
+// garment image. We prefetch the slow parts as soon as the mirror opens and run the rest in parallel.
+type TokenReply = { ok: boolean; at: number; apiKey?: string; keyIndex?: number; model?: string; maxSessionSeconds?: number; code?: string; error?: string };
+const TOKEN_TTL_MS = 40_000; // server tokens live 60 s; keep a safety margin
+let warmToken: Promise<TokenReply> | null = null;
+let sdkModule: Promise<typeof import("@decartai/sdk")> | null = null;
+const loadSdk = () => (sdkModule ??= import("@decartai/sdk"));
+const fetchToken = async (): Promise<TokenReply> => {
+  const r = await tokenRequest();
+  const j = await r.json().catch(() => ({}));
+  return { ...j, ok: r.ok, at: Date.now() };
+};
+/** Use the prefetched token if it's still fresh, otherwise fetch a new one. */
+const takeToken = (): Promise<TokenReply> => {
+  const w = warmToken;
+  warmToken = null;
+  return w ? w.then((t) => (t.ok && Date.now() - t.at < TOKEN_TTL_MS ? t : fetchToken())).catch(fetchToken) : fetchToken();
+};
+/** Call when Live AI is about to be used: warms the server, the SDK and the garment image. */
+export function prewarmDecart(garmentUrl?: string) {
+  loadSdk().catch(() => (sdkModule = null));
+  warmToken ??= fetchToken().catch(() => ({ ok: false, at: 0 }));
+  if (garmentUrl) prefetchGarment(garmentUrl);
+}
 
 const END_REASONS: Record<string, string> = {
   insufficient_credits: "Your Decart credits ran out.",
@@ -86,21 +112,25 @@ export function useDecartTryOn() {
       setError("");
       setPhase("starting");
       try {
-        // Check availability + learn the model/limits before asking for the camera
-        const probe = await tokenRequest();
-        const first = await probe.json();
-        setNeedsCode(first.code === "ACCESS_CODE");
-        if (!probe.ok) throw new Error(first.error ?? "Live try-on is unavailable");
-        let firstToken: string | null = first.apiKey;
-        keyIndex.current = typeof first.keyIndex === "number" ? first.keyIndex : null;
-
-        const { createDecartClient, models } = await import("@decartai/sdk");
-        const model = models.realtime(first.model);
+        // Everything independent runs at once: token, SDK, garment image, then the camera.
+        const tokenP = takeToken();
+        const imageP = garmentBlob(garment.imageUrl);
+        const { createDecartClient, models } = await loadSdk();
+        const model = models.realtime("lucy-vton-latest");
         const fps = typeof model.fps === "number" ? model.fps : (model.fps.ideal ?? model.fps.max ?? 25);
-        cam.current = await navigator.mediaDevices.getUserMedia({
+        const camP = navigator.mediaDevices.getUserMedia({
           audio: false,
           video: { facingMode: "user", frameRate: fps, width: model.width, height: model.height },
         });
+        const first = await tokenP;
+        setNeedsCode(first.code === "ACCESS_CODE");
+        if (!first.ok || !first.apiKey) {
+          camP.then((s) => s.getTracks().forEach((t) => t.stop())).catch(() => undefined);
+          throw new Error(first.error ?? "Live try-on is unavailable");
+        }
+        let firstToken: string | null = first.apiKey;
+        keyIndex.current = typeof first.keyIndex === "number" ? first.keyIndex : null;
+        cam.current = await camP;
 
         const client = createDecartClient({
           // Fresh short-lived token for every connect/reconnect
@@ -118,7 +148,7 @@ export function useDecartTryOn() {
           },
         });
 
-        const image = await garmentBlob(garment.imageUrl);
+        const image = await imageP;
         const session = await client.realtime.connect(cam.current, {
           model,
           mirror: "auto",

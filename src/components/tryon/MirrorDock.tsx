@@ -6,6 +6,7 @@ import { useMirrorRefs, useTryOn } from "./TryOnProvider";
 import { catalog } from "@/lib/catalog";
 import { inr } from "@/lib/format";
 import { Icon } from "@/components/ui/Icon";
+import { prefetchGarment } from "@/lib/garment";
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
@@ -257,7 +258,7 @@ export default function MirrorDock() {
         {!full && view !== "closed" && (
           <div className="no-scrollbar flex gap-1.5 overflow-x-auto border-t border-white/10 bg-black p-2">
             {rail.map((p) => (
-              <button key={p.id} onClick={() => m.tryOn(p)} aria-pressed={p.id === garment.id} title={`Try on ${p.name}`}
+              <button key={p.id} onClick={() => m.tryOn(p)} onPointerEnter={() => !photoMode && prefetchGarment(p.tryOnImageUrl)} aria-pressed={p.id === garment.id} title={`Try on ${p.name}`}
                 className={`relative h-16 w-12 shrink-0 overflow-hidden bg-cloud transition ${p.id === garment.id ? "ring-2 ring-white" : "opacity-60 hover:opacity-100"}`}>
                 <img src={p.modelImageUrl ?? p.imageUrl} alt={p.name} className="h-full w-full object-cover" />
                 {photoMode && m.pendingId === p.id && <span className="absolute inset-0 grid place-items-center bg-black/50"><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" /></span>}

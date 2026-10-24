@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useTryOn } from "@/components/tryon/TryOnProvider";
 import ProductImage from "./ProductImage";
+import { prefetchGarment } from "@/lib/garment";
 import { useCart } from "@/lib/cart";
 import { inr } from "@/lib/format";
 import { Icon } from "@/components/ui/Icon";
@@ -38,6 +39,7 @@ export default function ProductCard({ product: p, priority = false }: { product:
         {/* Try on: always reachable on touch, revealed on hover for mouse */}
         <button
           onClick={() => tryOn(p)}
+          onPointerEnter={() => live && prefetchGarment(p.tryOnImageUrl)}
           className="absolute right-2.5 top-2.5 flex h-9 items-center gap-1.5 bg-white/95 px-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink shadow-sm backdrop-blur transition hover:bg-ink hover:text-white md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
           aria-label={`Try on ${p.name}`}
         >
