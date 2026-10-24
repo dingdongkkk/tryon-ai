@@ -83,6 +83,7 @@ export function useDecartTryOn() {
   const setSeq = useRef(0);
   const keyIndex = useRef<number | null>(null);
   const creditRetries = useRef(0);
+  const transientTried = useRef(false);
   const startRef = useRef<((g: Garment, isRetry?: boolean) => Promise<void>) | null>(null);
 
   const teardown = useCallback(() => {
@@ -107,7 +108,10 @@ export function useDecartTryOn() {
   const start = useCallback(
     async (garment: Garment, isRetry = false) => {
       teardown();
-      if (!isRetry) creditRetries.current = 0;
+      if (!isRetry) {
+        creditRetries.current = 0;
+        transientTried.current = false;
+      }
       garmentRef.current = garment;
       setError("");
       setPhase("starting");
@@ -151,6 +155,8 @@ export function useDecartTryOn() {
         const image = await imageP;
         const session = await client.realtime.connect(cam.current, {
           model,
+          // Don't let the SDK silently retry ~10× (≈6 s each): fail fast, then we switch key or retry once.
+          retries: 0,
           mirror: "auto",
           initialState: { image, prompt: { text: garment.prompt, enhance: false } },
           onRemoteStream: (s) => setRemoteStream(s),
@@ -202,10 +208,18 @@ export function useDecartTryOn() {
       } catch (e) {
         teardown();
         const err = e as DOMException;
-        if (isCreditProblem(String(err?.message ?? "")) && keyIndex.current !== null && creditRetries.current < 3) {
+        const msg = String(err?.message ?? "");
+        if (isCreditProblem(msg) && keyIndex.current !== null && creditRetries.current < 3) {
+          // This key is out of credits: tell the server, then reconnect on the next backup key
           creditRetries.current++;
           setPhase("reconnecting");
           await reportExhausted(keyIndex.current);
+          return startRef.current?.(garment, true);
+        }
+        if (!isCreditProblem(msg) && err?.name !== "NotAllowedError" && err?.name !== "NotFoundError" && !transientTried.current) {
+          // one quick retry for a flaky network/connect error
+          transientTried.current = true;
+          setPhase("reconnecting");
           return startRef.current?.(garment, true);
         }
         setError(
