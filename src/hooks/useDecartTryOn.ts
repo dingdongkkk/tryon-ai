@@ -216,8 +216,10 @@ export function useDecartTryOn() {
           await reportExhausted(keyIndex.current);
           return startRef.current?.(garment, true);
         }
+        // "Stale connect attempt" = the SDK abandoned an attempt (often after a hidden credit/network error):
+        // start over once with a brand-new client and token instead of hanging.
         if (!isCreditProblem(msg) && err?.name !== "NotAllowedError" && err?.name !== "NotFoundError" && !transientTried.current) {
-          // one quick retry for a flaky network/connect error
+          // one quick retry for a flaky network/connect error or a stale attempt
           transientTried.current = true;
           setPhase("reconnecting");
           return startRef.current?.(garment, true);
