@@ -17,6 +17,7 @@
     "agenticorg-sdk": "0.4.0",
     "geist": "1.7.2",
     "next": "16.4.3",
+    "postgres": "3.4.9",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "server-only": "0.0.1"

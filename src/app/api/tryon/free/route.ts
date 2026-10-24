@@ -6,7 +6,7 @@ import { jsonError } from "@/lib/http";
 
 // Free photo try-on (IDM-VTON on Hugging Face). The shopper's photo is forwarded for this one
 // request and never stored by TryOn AI.
-export const maxDuration = 180;
+export const maxDuration = 150;
 
 export async function POST(req: Request) {
   try {
