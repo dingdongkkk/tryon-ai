@@ -29,7 +29,7 @@ export async function assertSameOrigin() {
   const h = await headers();
   const origin = h.get("origin");
   if (!origin) return; // same-origin fetches from older browsers / server-side calls
-  if (new URL(origin).host !== h.get("host")) throw new Error("Cross-origin request blocked");
+  if (new URL(origin).host !== h.get("host")) throw Object.assign(new Error("Cross-origin request blocked"), { status: 403 });
 }
 
 // Tiny fixed-window rate limiter (per process). Use Redis/Upstash when running multiple instances.
