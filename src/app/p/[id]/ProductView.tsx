@@ -62,7 +62,7 @@ export default function ProductView({ product: p, related }: { product: Product;
           </div>
           <div className="hidden gap-4 sm:grid">
             <div className="relative overflow-hidden bg-cloud">
-              <ProductImage product={p} variant="product" />
+              <ProductImage product={p} variant="product" fit="contain" className="bg-white" />
               <span className="absolute bottom-3 left-3 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]">Product</span>
             </div>
             <div className="flex flex-col justify-between bg-ink p-5 text-paper">
