@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
-import { Analytics } from "@vercel/analytics/next";
+import SiteAnalytics from "@/components/SiteAnalytics";
 import SiteHeader from "@/components/SiteHeader";
 import SiteFooter from "@/components/SiteFooter";
 import TryOnProvider from "@/components/tryon/TryOnProvider";
@@ -26,8 +26,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <main className="w-full flex-1">{children}</main>
           <SiteFooter status={integrationStatus()} />
         </TryOnProvider>
-        {/* Vercel Web Analytics: privacy-friendly visitor counts (no cookies); skips the ops console */}
-        <Analytics beforeSend={(e) => (e.url.includes("/console") ? null : e)} />
+        <SiteAnalytics />
       </body>
     </html>
   );
