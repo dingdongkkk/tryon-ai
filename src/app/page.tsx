@@ -21,10 +21,10 @@ export default function Home() {
         <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/30 to-transparent" />
         <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/25" />
         <div className="shell relative flex h-full flex-col justify-end pb-16 sm:pb-24">
-          <p className="nav-link animate-rise text-white/85">New season · The live fitting room</p>
-          <h1 className="display mt-5 max-w-4xl animate-rise text-[clamp(56px,9vw,152px)] leading-[0.85]" style={{ animationDelay: ".08s" }}>Wear it before<br />you buy it.</h1>
-          <p className="mt-6 max-w-md animate-rise text-[15px] leading-relaxed text-white/85" style={{ animationDelay: ".16s" }}>Browse the collection and see every piece on you, live on camera. Swap outfits in a tap. A stylist double-checks the fit.</p>
-          <div className="mt-9 animate-rise" style={{ animationDelay: ".24s" }}><HeroActions /></div>
+          <p className="nav-link text-white/85">New season · The live fitting room</p>
+          <h1 className="display mt-5 max-w-4xl text-[clamp(56px,9vw,152px)] leading-[0.85]">Wear it before<br />you buy it.</h1>
+          <p className="mt-6 max-w-md text-[15px] leading-relaxed text-white/85">Browse the collection and see every piece on you, live on camera. Swap outfits in a tap. A stylist double-checks the fit.</p>
+          <div className="mt-9"><HeroActions /></div>
         </div>
         <div className="absolute bottom-6 right-6 hidden items-center gap-3 border border-white/20 bg-black/30 p-2 pr-4 text-white backdrop-blur-md md:flex">
           <img src={catalog[11].modelImageUrl ?? catalog[11].imageUrl} alt="" className="h-14 w-11 object-cover" />
