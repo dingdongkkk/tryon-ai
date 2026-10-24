@@ -14,6 +14,7 @@
   "dependencies": {
     "@decartai/sdk": "0.2.8",
     "@gradio/client": "2.7.1",
+    "@vercel/analytics": "2.0.1",
     "agenticorg-sdk": "0.4.0",
     "geist": "1.7.2",
     "next": "16.4.3",
